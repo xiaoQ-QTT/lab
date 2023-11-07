@@ -9,26 +9,35 @@ package mr
 import "os"
 import "strconv"
 
-type IDArgs struct {
-	Id string
-}
+type TaskType int
+type TaskStatus int
 
-type StatusReply struct {
-	Status int // 0失败、1成功
-}
+const (
+	MAP    TaskType = 0
+	REDUCE TaskType = 1
+	OVER   TaskType = 2
+	SLEEP  TaskType = 3
+
+	IDLE       TaskStatus = 4
+	PROCESSING TaskStatus = 5
+	FINISH     TaskStatus = 6
+)
+
+type TaskOverReply struct{}
+
+type RequestTaskArgs struct{}
 
 type GetTaskReply struct {
-	Status       int         // 0没有，1为有
-	TaskType     string      // map、reduce、over
+	TaskType     TaskType    // MAP、REDUCE、OVER、SLEEP
 	FileName     interface{} // 待处理文件名，map阶段为string类型，reduce阶段为[]string类型
 	ReduceNumber int         // reduce任务数
 	TaskKey      int         // map任务的key
 }
 
 type MapTaskOverArgs struct {
-	Id         string
-	FileNames  []string
-	MapTaskKey int
+	Id          string
+	FileNameMap map[int]string
+	MapTaskKey  int
 }
 
 type ReduceTaskOverArgs struct {

@@ -33,7 +33,10 @@ func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 	// 生成Id，fileNames保存map任务产生的文件路径（这里就是文件名）
-	var fileNames []string
+	var fileNames []map[int]string
+	// worker结束之前应该 删除中间文件
+	// deleteFiles(fileNames)
+
 	id, err := generateUUID()
 	if err != nil {
 		log.Fatal(fmt.Println("Failed to generate UUID:", err))
@@ -42,24 +45,19 @@ func Worker(mapf func(string, string) []KeyValue,
 	for {
 		// 请求任务
 		reply := GetLeisureTask(id)
-		if reply.TaskType == "over" {
-			// 删除中间文件，退出
-			deleteFiles(fileNames)
+
+		switch reply.TaskType {
+		case OVER:
 			return
+		case MAP:
+			doMapTask(id, &reply, fileNames, mapf)
+		case REDUCE:
+			doReduceTask(id, &reply, reducef)
+		case SLEEP:
+			// 没有空闲任务，休眠0.45秒
+			time.Sleep(time.Millisecond * 450)
 		}
-		if reply.Status == 0 {
-			// 没有空闲任务，休眠0.5秒
-			time.Sleep(time.Millisecond * 500)
-		} else {
-			// 有空闲任务
-			if reply.TaskType == "map" {
-				// map任务
-				doMapTask(id, &reply, fileNames, mapf)
-			} else {
-				// reduce任务
-				doReduceTask(id, &reply, reducef)
-			}
-		}
+
 	}
 }
 
@@ -94,18 +92,20 @@ func generateUUID() (string, error) {
 	return uuidStr, nil
 }
 
-func deleteFiles(fileNames []string) error {
-	for _, fileName := range fileNames {
-		err := os.Remove(fileName)
-		if err != nil {
-			return fmt.Errorf("无法删除文件 %s: %v", fileName, err)
+func deleteFiles(fileNames []map[int]string) error {
+	for _, fileNameMap := range fileNames {
+		for _, fileName := range fileNameMap {
+			err := os.Remove(fileName)
+			if err != nil {
+				return fmt.Errorf("无法删除文件 %s: %v", fileName, err)
+			}
+			fmt.Printf("成功删除文件 %s\n", fileName)
 		}
-		fmt.Printf("成功删除文件 %s\n", fileName)
 	}
 	return nil
 }
 
-func doMapTask(id string, reply *GetTaskReply, fileNames []string, mapf func(string, string) []KeyValue) {
+func doMapTask(id string, reply *GetTaskReply, fileNames []map[int]string, mapf func(string, string) []KeyValue) {
 	// 从文件读入数据-->使用map函数处理
 	file, err := os.Open(reply.FileName.(string))
 	if err != nil {
@@ -120,7 +120,7 @@ func doMapTask(id string, reply *GetTaskReply, fileNames []string, mapf func(str
 
 	// 将kv数据写入文件中
 	tempNames := WriteFile(kva, reply.ReduceNumber, reply.TaskKey)
-	fileNames = append(fileNames, tempNames...) // 保存这个worker完成的所有任务的中间文件路径
+	fileNames = append(fileNames, tempNames) // 保存这个worker完成的所有任务的中间文件路径
 
 	// 告诉master，完成任务，发送生成的中间文件位置
 	mapTaskOver(id, tempNames, reply.TaskKey)
@@ -151,7 +151,8 @@ func doReduceTask(id string, reply *GetTaskReply, reducef func(string, []string)
 	// 处理kva，处理成reducef需要的数据，并使用reducef处理，使用临时文件
 	fileName := "mr-out-" + strconv.Itoa(reply.TaskKey)
 	tempFile, err := os.CreateTemp("", "temp")
-	defer os.Remove(tempFile.Name())
+	defer tempFile.Close()
+
 	if err != nil {
 		log.Fatalf("Error creating temporary file: %s", err)
 	}
@@ -173,22 +174,21 @@ func doReduceTask(id string, reply *GetTaskReply, reducef func(string, []string)
 		i = j
 	}
 	err = os.Rename(tempFile.Name(), fileName)
-	tempFile.Close()
 
 	// 告诉master，reduce任务结束
 	args := ReduceTaskOverArgs{id, reply.TaskKey}
-	reply1 := StatusReply{0}
+	reply1 := TaskOverReply{}
 	call("Coordinator.ReduceTaskOver", &args, &reply1)
 }
 
-func mapTaskOver(uuId string, fileNames []string, key int) {
+func mapTaskOver(uuId string, fileNames map[int]string, key int) {
 	args := MapTaskOverArgs{uuId, fileNames, key}
-	reply := StatusReply{0}
+	reply := TaskOverReply{}
 	call("Coordinator.MapTaskOver", &args, &reply)
 }
 
 // WriteFile 写入到文件中
-func WriteFile(kva []KeyValue, reduceNumber int, mapTaskKey int) []string {
+func WriteFile(kva []KeyValue, reduceNumber int, mapTaskKey int) map[int]string {
 	// 根据key，使用ihash方法将值分为10部分
 	mapKva := make(map[int][]KeyValue)
 	for _, kv := range kva {
@@ -202,7 +202,7 @@ func WriteFile(kva []KeyValue, reduceNumber int, mapTaskKey int) []string {
 	}
 
 	// 写入临时文件，成功后改名
-	fileNames := make([]string, reduceNumber) // 最终文件名
+	fileNames := make(map[int]string, reduceNumber) // 最终文件名
 	for key, kvList := range mapKva {
 		tempFile, err := os.CreateTemp("", "temp")
 		if err != nil {
@@ -225,8 +225,8 @@ func WriteFile(kva []KeyValue, reduceNumber int, mapTaskKey int) []string {
 
 // GetLeisureTask 询问是否有空闲的任务可分配
 func GetLeisureTask(uuId string) GetTaskReply {
-	reply := GetTaskReply{0, "", "", 0, 0}
-	args := IDArgs{uuId}
+	reply := GetTaskReply{}
+	args := RequestTaskArgs{}
 	call("Coordinator.AssignLeisureTask", &args, &reply)
 	return reply
 }
