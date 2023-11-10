@@ -6,11 +6,9 @@ package main
 // go run mrsequential.go wc.so pg*.txt
 //
 
-import (
-	"fmt"
-	"plugin"
-)
-import "6.824/mr"
+import "fmt"
+import "6.5840/mr"
+import "plugin"
 import "os"
 import "log"
 import "io/ioutil"
@@ -73,10 +71,9 @@ func main() {
 		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
 			j++
 		}
-		var values []string
+		values := []string{}
 		for k := i; k < j; k++ {
 			values = append(values, intermediate[k].Value)
-
 		}
 		output := reducef(intermediate[i].Key, values)
 
